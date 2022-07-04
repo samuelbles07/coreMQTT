@@ -39,6 +39,7 @@
  * @brief param[in] pContext Initialized MQTT context.
  * @brief param[in] pBufferToSend Buffer to be sent to network.
  * @brief param[in] bytesToSend Number of bytes to be sent.
+ * @brief param[in] updateLastPacketTime Flag to choose either will update last transsmision or not
  *
  * @note This operation may call the transport send function
  * repeatedly to send bytes over the network until either:
@@ -53,7 +54,8 @@
  */
 static int32_t sendPacket( MQTTContext_t * pContext,
                            const uint8_t * pBufferToSend,
-                           size_t bytesToSend );
+                           size_t bytesToSend,
+                           bool updateLastPacketTime );
 
 /**
  * @brief Calculate the interval between two millisecond timestamps, including
@@ -596,7 +598,8 @@ static bool matchTopicFilter( const char * pTopicName,
 
 static int32_t sendPacket( MQTTContext_t * pContext,
                            const uint8_t * pBufferToSend,
-                           size_t bytesToSend )
+                           size_t bytesToSend,
+                           bool updateLastPacketTime )
 {
     const uint8_t * pIndex = pBufferToSend;
     size_t bytesRemaining = bytesToSend;
@@ -660,7 +663,7 @@ static int32_t sendPacket( MQTTContext_t * pContext,
     }
 
     /* Update time of last transmission if the entire packet is successfully sent. */
-    if( totalBytesSent > 0 )
+    if( totalBytesSent > 0 && updateLastPacketTime )
     {
         pContext->lastPacketTime = lastSendTimeMs;
         LogDebug( ( "Successfully sent packet at time %lu.",
@@ -966,7 +969,8 @@ static MQTTStatus_t sendPublishAcks( MQTTContext_t * pContext,
         {
             bytesSent = sendPacket( pContext,
                                     pContext->networkBuffer.pBuffer,
-                                    MQTT_PUBLISH_ACK_PACKET_SIZE );
+                                    MQTT_PUBLISH_ACK_PACKET_SIZE,
+                                    true );
         }
 
         if( bytesSent == ( int32_t ) MQTT_PUBLISH_ACK_PACKET_SIZE )
@@ -1407,6 +1411,7 @@ static MQTTStatus_t sendPublish( MQTTContext_t * pContext,
 {
     MQTTStatus_t status = MQTTSuccess;
     int32_t bytesSent = 0;
+    bool updateLastPacketTime = true;
 
     assert( pContext != NULL );
     assert( pPublishInfo != NULL );
@@ -1414,10 +1419,20 @@ static MQTTStatus_t sendPublish( MQTTContext_t * pContext,
     assert( pContext->networkBuffer.pBuffer != NULL );
     assert( !( pPublishInfo->payloadLength > 0 ) || ( pPublishInfo->pPayload != NULL ) );
 
+    if ( pPublishInfo->qos == MQTTQoS0 ) {
+        /*
+         * Because QOS0 not wait for ACKs, it will never know if it is success or not.
+         * So when application periodically publish data under keep alive interval time,
+         * when internet suddenly unavailable in runtime, application will never get error event.
+         */
+        updateLastPacketTime = false;
+    }
+
     /* Send header first. */
     bytesSent = sendPacket( pContext,
                             pContext->networkBuffer.pBuffer,
-                            headerSize );
+                            headerSize,
+                            updateLastPacketTime );
 
     if( bytesSent < ( int32_t ) headerSize )
     {
@@ -1435,7 +1450,8 @@ static MQTTStatus_t sendPublish( MQTTContext_t * pContext,
         {
             bytesSent = sendPacket( pContext,
                                     pPublishInfo->pPayload,
-                                    pPublishInfo->payloadLength );
+                                    pPublishInfo->payloadLength,
+                                    updateLastPacketTime );
 
             if( bytesSent < ( int32_t ) pPublishInfo->payloadLength )
             {
@@ -1804,7 +1820,8 @@ MQTTStatus_t MQTT_Connect( MQTTContext_t * pContext,
     {
         bytesSent = sendPacket( pContext,
                                 pContext->networkBuffer.pBuffer,
-                                packetSize );
+                                packetSize,
+                                true );
 
         if( bytesSent < ( int32_t ) packetSize )
         {
@@ -1895,7 +1912,8 @@ MQTTStatus_t MQTT_Subscribe( MQTTContext_t * pContext,
         /* Send serialized MQTT SUBSCRIBE packet to transport layer. */
         bytesSent = sendPacket( pContext,
                                 pContext->networkBuffer.pBuffer,
-                                packetSize );
+                                packetSize,
+                                true );
 
         if( bytesSent < ( int32_t ) packetSize )
         {
@@ -2027,7 +2045,8 @@ MQTTStatus_t MQTT_Ping( MQTTContext_t * pContext )
         /* Send the serialized PINGREQ packet to transport layer. */
         bytesSent = sendPacket( pContext,
                                 pContext->networkBuffer.pBuffer,
-                                packetSize );
+                                packetSize,
+                                true );
 
         /* It is an error to not send the entire PINGREQ packet. */
         if( bytesSent < ( int32_t ) packetSize )
@@ -2090,7 +2109,8 @@ MQTTStatus_t MQTT_Unsubscribe( MQTTContext_t * pContext,
         /* Send serialized MQTT UNSUBSCRIBE packet to transport layer. */
         bytesSent = sendPacket( pContext,
                                 pContext->networkBuffer.pBuffer,
-                                packetSize );
+                                packetSize,
+                                true );
 
         if( bytesSent < ( int32_t ) packetSize )
         {
@@ -2140,7 +2160,8 @@ MQTTStatus_t MQTT_Disconnect( MQTTContext_t * pContext )
     {
         bytesSent = sendPacket( pContext,
                                 pContext->networkBuffer.pBuffer,
-                                packetSize );
+                                packetSize,
+                                true );
 
         if( bytesSent < ( int32_t ) packetSize )
         {
